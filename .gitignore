@@ -34,7 +34,8 @@ yarn-error.log*
 postgres-data/
 *.log
 
-# Scan output (may contain sensitive findings)
-scans/
-reports/
+# Scan output (may contain sensitive findings) — anchored to repo root so it
+# does not match UI route dirs like ui/app/(app)/scans/.
+/scans/
+/reports/
 *.scan.json
