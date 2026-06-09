@@ -23,17 +23,20 @@ from __future__ import annotations
 
 import asyncio
 import threading
+import time
 import uuid
 from typing import Any
 
 import uvicorn
 from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
-from redhive import db
+from redhive import db, report
 from redhive.agents.graph import run_engagement
+from redhive.memory import diff_findings
 from redhive.scope import ScopeError, assert_allowed
 
 app = FastAPI(
@@ -68,6 +71,25 @@ _DONE = object()  # marker placed in a queue (as the sentinel) when a scan ends
 
 class ScanRequest(BaseModel):
     target: str
+
+
+def _previous_findings(target: str, current_scan_id: str) -> list[dict[str, Any]]:
+    """Most recent completed scan's findings for ``target`` (HillClimb memory).
+
+    Searches the in-memory store (newest first), then falls back to Postgres.
+    Returns ``[]`` when this is the target's first scan.
+    """
+    candidates = [
+        (sid, rec)
+        for sid, rec in _SCANS.items()
+        if sid != current_scan_id
+        and rec.get("target") == target
+        and rec.get("status") == "done"
+    ]
+    candidates.sort(key=lambda kv: kv[1].get("created_at", 0), reverse=True)
+    if candidates:
+        return candidates[0][1].get("findings", [])
+    return []
 
 
 # --------------------------------------------------------------------------- #
@@ -121,8 +143,20 @@ def _run_scan(scan_id: str, target: str, loop: asyncio.AbstractEventLoop) -> Non
         state = run_engagement(target, log_callback=_emit)
         # Validator/reporter rewrite findings wholesale; prefer confirmed.
         findings = state.get("confirmed") or state.get("findings") or []
-        record["findings"] = list(findings)
-        for finding in findings:
+
+        # HillClimb memory: diff against this target's previous scan.
+        previous = _previous_findings(target, scan_id)
+        annotated, fixed, summary = diff_findings(previous, list(findings))
+        record["findings"] = annotated
+        record["fixed"] = fixed
+        record["regression_summary"] = summary
+        if previous:
+            _emit(
+                f"[memory] vs previous scan — {summary['new']} new, "
+                f"{summary['recurring']} recurring, {summary['fixed']} fixed."
+            )
+
+        for finding in annotated:
             _db_save_finding(scan_id, finding)
         record["status"] = "done"
         _db_set_status(scan_id, "done")
@@ -163,6 +197,9 @@ async def create_scan(req: ScanRequest, background_tasks: BackgroundTasks) -> di
         "status": "running",
         "findings": [],
         "log": [],
+        "fixed": [],
+        "regression_summary": None,
+        "created_at": time.time(),
     }
     _LOG_QUEUES[scan_id] = asyncio.Queue()
 
@@ -177,9 +214,33 @@ async def create_scan(req: ScanRequest, background_tasks: BackgroundTasks) -> di
     return {"scan_id": scan_id, "status": "running"}
 
 
+@app.get("/scans")
+async def list_scans() -> dict:
+    """List scans (newest first) with a severity-count summary each."""
+    items = []
+    for sid, rec in sorted(
+        _SCANS.items(), key=lambda kv: kv[1].get("created_at", 0), reverse=True
+    ):
+        counts: dict[str, int] = {}
+        for f in rec.get("findings", []):
+            sev = str(f.get("severity", "info"))
+            counts[sev] = counts.get(sev, 0) + 1
+        items.append(
+            {
+                "scan_id": sid,
+                "target": rec.get("target"),
+                "status": rec.get("status"),
+                "findings": sum(counts.values()),
+                "severity_counts": counts,
+                "regression_summary": rec.get("regression_summary"),
+            }
+        )
+    return {"scans": items}
+
+
 @app.get("/scans/{scan_id}")
 async def get_scan(scan_id: str) -> dict:
-    """Return current status, findings, and accumulated log for a scan."""
+    """Return current status, findings, regression info, and log for a scan."""
     record = _SCANS.get(scan_id)
     if record is not None:
         return {
@@ -187,6 +248,8 @@ async def get_scan(scan_id: str) -> dict:
             "target": record["target"],
             "status": record["status"],
             "findings": record["findings"],
+            "fixed": record.get("fixed", []),
+            "regression_summary": record.get("regression_summary"),
             "log": record["log"],
         }
 
@@ -204,6 +267,28 @@ async def get_scan(scan_id: str) -> dict:
         "findings": findings,
         "log": [],
     }
+
+
+@app.get("/scans/{scan_id}/report")
+async def get_report(scan_id: str, format: str = "markdown"):
+    """Export a finished scan as a Markdown (default) or JSON pentest report."""
+    record = _SCANS.get(scan_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"Scan {scan_id} not found")
+
+    scan = {
+        "scan_id": scan_id,
+        "target": record.get("target"),
+        "status": record.get("status"),
+        "findings": record.get("findings", []),
+        "fixed": record.get("fixed", []),
+        "regression_summary": record.get("regression_summary"),
+    }
+    if format == "json":
+        return report.render_json(scan)
+    return PlainTextResponse(
+        report.render_markdown(scan), media_type="text/markdown"
+    )
 
 
 @app.get("/scans/{scan_id}/log")
