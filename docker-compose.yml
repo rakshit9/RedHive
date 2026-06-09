@@ -1,9 +1,12 @@
 # RedHive local stack.
 #
 #   juiceshop -> the intentionally-vulnerable practice TARGET we scan
-#   db        -> Postgres for scans + findings (schema auto-loaded on first boot)
+#   db        -> Postgres (schema managed by Alembic migrations, not initdb)
+#   api       -> FastAPI web layer (auth, scans, SSE)
+#   worker    -> background scan executor (pulls queued scans from Postgres)
 #
-# Bring it up with:  docker compose up -d
+# Bring it up with:  docker compose up -d --build
+# Migrations run automatically via the api service entrypoint.
 services:
   juiceshop:
     image: bkimminich/juice-shop
@@ -20,26 +23,49 @@ services:
       POSTGRES_PASSWORD: redhive
       POSTGRES_DB: redhive
     ports:
-      - "5432:5432"
+      # Published on 5433 to avoid colliding with a host-installed Postgres on
+      # 5432. Inside the compose network services still reach it on db:5432.
+      - "5433:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
-      # schema.sql in /docker-entrypoint-initdb.d/ runs automatically the
-      # first time the data volume is created (i.e. on a fresh db).
-      - ./db/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U redhive"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
     restart: unless-stopped
 
-  # --- API service (uncomment when the FastAPI app is ready) ---
-  # api:
-  #   build: .
-  #   container_name: redhive-api
-  #   ports:
-  #     - "8000:8000"
-  #   environment:
-  #     # talk to the db service over the compose network, not localhost
-  #     DATABASE_URL: postgresql://redhive:redhive@db:5432/redhive
-  #   depends_on:
-  #     - db
-  #   restart: unless-stopped
+  api:
+    build: .
+    container_name: redhive-api
+    command: ["./scripts/start-api.sh"]
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql://redhive:redhive@db:5432/redhive
+      SCAN_ALLOWLIST: localhost,127.0.0.1,juiceshop,host.docker.internal
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  worker:
+    build: .
+    container_name: redhive-worker
+    command: ["python", "-m", "redhive.worker"]
+    environment:
+      DATABASE_URL: postgresql://redhive:redhive@db:5432/redhive
+      SCAN_ALLOWLIST: localhost,127.0.0.1,juiceshop,host.docker.internal
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+      api:
+        condition: service_started
+    restart: unless-stopped
 
 volumes:
   postgres-data:
