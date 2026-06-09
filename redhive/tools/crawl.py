@@ -43,13 +43,16 @@ def crawl(target: str, max_pages: int = 25) -> list[Endpoint]:
     queue: deque[str] = deque([target])
 
     def _add(url: str, method: str = "GET", *, has_form: bool = False,
-             notes: str = "") -> None:
+             extra_params: list[str] | None = None, notes: str = "") -> None:
         key = (url, method.upper())
         if key not in endpoints:
+            # Merge query-string params with any form-field names so the
+            # injection probes know exactly what inputs to test.
+            params = sorted(set(_params_of(url)) | set(extra_params or []))
             endpoints[key] = Endpoint(
                 url=url,
                 method=method.upper(),
-                params=_params_of(url),
+                params=params,
                 has_form=has_form,
                 notes=notes,
             )
@@ -86,8 +89,15 @@ def crawl(target: str, max_pages: int = 25) -> list[Endpoint]:
                 action = form.get("action") or url
                 form_url = urljoin(url, action)
                 method = (form.get("method") or "GET").upper()
+                # Collect named inputs so the injection probes have fields to test.
+                fields = [
+                    el.get("name")
+                    for el in form.find_all(["input", "textarea", "select"])
+                    if el.get("name")
+                ]
                 if _same_host(target, form_url):
-                    _add(form_url, method, has_form=True, notes="discovered via <form>")
+                    _add(form_url, method, has_form=True,
+                         extra_params=fields, notes="discovered via <form>")
 
             # Queue same-host anchor links for further crawling.
             for a in soup.find_all("a", href=True):
