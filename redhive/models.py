@@ -20,6 +20,25 @@ class Severity(str, Enum):
     CRITICAL = "critical"
 
 
+_VALID_SEVERITIES = {s.value for s in Severity}
+
+
+def normalize_severity(value: object) -> str:
+    """Coerce any severity-ish value to a valid lowercase ``Severity`` string.
+
+    Handles plain strings, ``Severity`` enum members, and stringified enums
+    like ``"Severity.HIGH"`` (what ``str()`` yields for a ``(str, Enum)``).
+    Serialized findings carry the enum member until the Reporter runs, so every
+    consumer that reasons over severity must normalize through here.
+    """
+    if isinstance(value, Severity):
+        return value.value
+    sev = str(value or "").strip().lower()
+    if "." in sev:  # e.g. "severity.high" -> "high"
+        sev = sev.rsplit(".", 1)[-1]
+    return sev if sev in _VALID_SEVERITIES else Severity.INFO.value
+
+
 class Endpoint(BaseModel):
     """A discovered piece of attack surface (from the Recon agent)."""
 
@@ -76,3 +95,13 @@ class EngagementState(TypedDict, total=False):
     plan: list[str]  # Lead agent's current to-do
     log: list[str]  # human-readable live log for the UI
     done: bool
+
+    # Recon hand-off + iterative-loop bookkeeping. These must live on the
+    # public contract (not just the graph's internal schema) because LangGraph
+    # derives each node's input keys from its ``state: EngagementState``
+    # annotation — fields absent here are silently withheld from those nodes.
+    fingerprint: dict[str, Any]  # recon -> lead/tester
+    round: int  # iterative-loop round counter (lead_review)
+    max_rounds: int  # loop cap
+    next_action: str  # "deepen" | "finish" (lead_review -> routing)
+    deep_pass: bool  # widen tester coverage on a later round

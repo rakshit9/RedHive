@@ -13,7 +13,7 @@ from collections import Counter
 from typing import Any
 
 from redhive.llm import get_llm
-from redhive.models import EngagementState, Severity
+from redhive.models import EngagementState, Severity, normalize_severity
 
 _SYSTEM = (
     "You are a senior application-security engineer writing the remediation "
@@ -23,25 +23,8 @@ _SYSTEM = (
     "preamble, no markdown headers."
 )
 
-_VALID_SEVERITIES = {s.value for s in Severity}
-
 # Severity ordering for the summary roll-up (high -> low).
 _SEVERITY_ORDER = ["critical", "high", "medium", "low", "info"]
-
-
-def _normalize_severity(value: Any) -> str:
-    """Coerce any severity-ish value to a valid ``Severity`` string.
-
-    Handles plain strings, ``Severity`` enum members, and stringified enums
-    like ``"Severity.HIGH"`` — which is what ``str()`` yields for a
-    ``(str, Enum)`` member and was previously collapsing everything to "info".
-    """
-    if isinstance(value, Severity):
-        return value.value
-    sev = str(value or "").strip().lower()
-    if "." in sev:  # e.g. "severity.high" -> "high"
-        sev = sev.rsplit(".", 1)[-1]
-    return sev if sev in _VALID_SEVERITIES else Severity.INFO.value
 
 
 def _llm_remediation(llm: Any, finding: dict[str, Any]) -> str:
@@ -76,7 +59,7 @@ def reporter(state: EngagementState) -> dict[str, Any]:
     reported: list[dict[str, Any]] = []
     for f in confirmed:
         finding = dict(f)
-        finding["severity"] = _normalize_severity(finding.get("severity"))
+        finding["severity"] = normalize_severity(finding.get("severity"))
 
         remediation = ""
         if llm is not None and not finding.get("remediation"):

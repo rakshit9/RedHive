@@ -1,9 +1,12 @@
 """Test agent node.
 
-Runs the deterministic probes — security headers, TLS, exposed files — across
-the target and the discovered endpoints, collecting raw ``Finding`` objects.
-Every tool fails soft, so a dead host simply yields fewer findings rather than
-crashing the engagement.
+Runs the probes the Lead selected across the target and discovered endpoints,
+collecting raw ``Finding`` objects. Every tool fails soft, so a dead host
+simply yields fewer findings rather than crashing the engagement.
+
+The node is re-entrant: on a deeper pass (``state["deep_pass"]`` set by the
+Lead's review) it widens coverage — more endpoints, all input probes — so the
+second round genuinely digs further rather than repeating the first.
 """
 
 from __future__ import annotations
@@ -12,20 +15,25 @@ from typing import Any
 
 from redhive.models import EngagementState
 from redhive.tools import (
+    check_cors,
+    check_csrf,
     check_exposed_files,
+    check_open_redirect,
+    check_outdated,
     check_security_headers,
     check_tls,
     test_sqli,
     test_xss,
 )
 
-# Cap how many distinct URLs we header-scan so a big crawl can't explode runtime.
+# Coverage caps — widened on a deep pass so the second round digs further.
 _MAX_HEADER_TARGETS = 10
-# Cap how many input-bearing endpoints we fuzz with injection probes.
+_MAX_HEADER_TARGETS_DEEP = 25
 _MAX_INJECTION_TARGETS = 10
+_MAX_INJECTION_TARGETS_DEEP = 25
 
 
-def _scan_targets(state: EngagementState) -> list[str]:
+def _endpoint_urls(state: EngagementState, limit: int) -> list[str]:
     """The target plus a deduped sample of discovered endpoint URLs."""
     target = state.get("target", "")
     urls: list[str] = [target] if target else []
@@ -35,45 +43,48 @@ def _scan_targets(state: EngagementState) -> list[str]:
         if url and url not in seen:
             seen.add(url)
             urls.append(url)
-    return urls[:_MAX_HEADER_TARGETS]
+    return urls[:limit]
 
 
 def tester(state: EngagementState) -> dict[str, Any]:
-    """Run header/TLS/exposed-file probes and collect raw findings."""
+    """Run the selected probes and collect raw findings."""
     target = state.get("target", "")
-    log: list[str] = ["[tester] Running selected probes..."]
+    deep = bool(state.get("deep_pass"))
+    pass_label = "deep pass" if deep else "first pass"
+    log: list[str] = [f"[tester] Running probes ({pass_label})..."]
+
+    header_cap = _MAX_HEADER_TARGETS_DEEP if deep else _MAX_HEADER_TARGETS
+    inj_cap = _MAX_INJECTION_TARGETS_DEEP if deep else _MAX_INJECTION_TARGETS
 
     findings: list[dict[str, Any]] = []
 
-    # Security headers + cookie flags across the sampled endpoints.
-    header_targets = _scan_targets(state)
+    # --- Server-wide / per-endpoint header checks ------------------------
+    header_targets = _endpoint_urls(state, header_cap)
     for url in header_targets:
         for f in check_security_headers(url):
             findings.append(f.model_dump())
-    log.append(
-        f"[tester] Security-header scan over {len(header_targets)} endpoint(s)."
-    )
+        for f in check_cors(url):
+            findings.append(f.model_dump())
+    log.append(f"[tester] Header/CORS scan over {len(header_targets)} endpoint(s).")
 
-    # TLS posture — host-level, so only the target once.
+    # --- Host-level checks (once) ----------------------------------------
     if target:
-        tls_findings = check_tls(target)
-        for f in tls_findings:
+        for f in check_tls(target):
             findings.append(f.model_dump())
-        log.append(f"[tester] TLS scan produced {len(tls_findings)} finding(s).")
-
-        # Exposed sensitive files — relative to the target root.
-        exposed = check_exposed_files(target)
-        for f in exposed:
+        for f in check_exposed_files(target):
             findings.append(f.model_dump())
-        log.append(f"[tester] Exposed-file scan produced {len(exposed)} finding(s).")
+        # Outdated-software check reads the recon fingerprint off state.
+        fp: dict[str, Any] = state.get("fingerprint", {})  # type: ignore[typeddict-item]
+        for f in check_outdated(fp):
+            findings.append(f.model_dump())
+        log.append("[tester] TLS / exposed-file / outdated-software scan done.")
 
-    # Injection probes (reflected XSS, error-based SQLi) against every endpoint
-    # that actually takes input — a query param or a discovered form.
+    # --- Input-bearing endpoints: injection + redirect + CSRF -------------
     injection_targets = [
         ep
         for ep in state.get("attack_surface", [])
         if ep.get("params") or ep.get("has_form")
-    ][:_MAX_INJECTION_TARGETS]
+    ][:inj_cap]
     injected = 0
     for ep in injection_targets:
         url = str(ep.get("url", ""))
@@ -87,8 +98,14 @@ def tester(state: EngagementState) -> dict[str, Any]:
         for f in test_sqli(url, params, method):
             findings.append(f.model_dump())
             injected += 1
+        for f in check_open_redirect(url, params):
+            findings.append(f.model_dump())
+            injected += 1
+        for f in check_csrf(url, params):
+            findings.append(f.model_dump())
+            injected += 1
     log.append(
-        f"[tester] Injection probes over {len(injection_targets)} input(s) "
+        f"[tester] Injection/redirect/CSRF over {len(injection_targets)} input(s) "
         f"produced {injected} finding(s)."
     )
 

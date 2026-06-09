@@ -20,11 +20,12 @@ a partial update and have it merged rather than overwrite prior state.
 from __future__ import annotations
 
 import operator
-from typing import Annotated, Any, Callable
+from typing import Annotated, Any, Callable, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
 from redhive.agents.lead import lead
+from redhive.agents.lead_review import lead_review
 from redhive.agents.orchestrator import orchestrator
 from redhive.agents.recon import recon
 from redhive.agents.reporter import reporter
@@ -33,26 +34,44 @@ from redhive.agents.validator import validator
 from redhive.models import EngagementState
 
 
-class _GraphState(EngagementState, total=False):
-    """Internal state with a reducer for the live log.
+class _GraphState(TypedDict, total=False):
+    """The graph's channel schema — declared explicitly (not by subclassing
+    ``EngagementState``), because LangGraph derives channels from this exact
+    TypedDict and subclass-inherited fields were not registering as channels.
 
-    Same shape as ``EngagementState`` (the public contract). Only ``log`` gets
-    an ``operator.add`` reducer, because every node *appends* progress lines and
-    we want them to accumulate across the whole run. All other fields keep the
-    default last-write-wins: each is produced (and, where re-processed, fully
-    rewritten) by a single owning node — ``attack_surface`` by recon, ``plan``
-    by lead, ``findings``/``confirmed`` by tester then rewritten wholesale by
-    validator/reporter — so appending them would create duplicates. The Recon
-    agent also stashes a ``fingerprint`` dict here for the Lead to reason over.
+    Mirrors the public ``EngagementState`` contract plus the loop's working
+    fields. Only ``log`` gets an ``operator.add`` reducer so progress lines
+    accumulate across the run; every other field is last-write-wins, owned by a
+    single node per round (``attack_surface``/``fingerprint`` by recon, ``plan``
+    by lead, ``findings``/``confirmed`` rewritten wholesale by tester/validator,
+    the loop counters by ``lead_review``).
     """
 
+    target: str
+    scope_allowed: bool
+    attack_surface: list[dict[str, Any]]
+    findings: list[dict[str, Any]]
+    confirmed: list[dict[str, Any]]
+    patches: list[dict[str, Any]]
+    plan: list[str]
     log: Annotated[list[str], operator.add]
+    done: bool
+    # Working fields for recon hand-off and the iterative loop.
     fingerprint: dict[str, Any]
+    round: int
+    max_rounds: int
+    next_action: str
+    deep_pass: bool
 
 
 def _route_after_orchestrator(state: EngagementState) -> str:
     """Conditional edge: skip the scan entirely if the target is out of scope."""
     return "recon" if state.get("scope_allowed") else END
+
+
+def _route_after_review(state: dict[str, Any]) -> str:
+    """Conditional edge: loop back for a deeper pass, or finish up."""
+    return "tester" if state.get("next_action") == "deepen" else "reporter"
 
 
 def build_graph():
@@ -64,6 +83,7 @@ def build_graph():
     builder.add_node("lead", lead)
     builder.add_node("tester", tester)
     builder.add_node("validator", validator)
+    builder.add_node("lead_review", lead_review)
     builder.add_node("reporter", reporter)
 
     builder.add_edge(START, "orchestrator")
@@ -75,7 +95,13 @@ def build_graph():
     builder.add_edge("recon", "lead")
     builder.add_edge("lead", "tester")
     builder.add_edge("tester", "validator")
-    builder.add_edge("validator", "reporter")
+    # After validation the Lead reviews results and may loop for a deeper pass.
+    builder.add_edge("validator", "lead_review")
+    builder.add_conditional_edges(
+        "lead_review",
+        _route_after_review,
+        {"tester": "tester", "reporter": "reporter"},
+    )
     builder.add_edge("reporter", END)
 
     return builder.compile()
@@ -88,7 +114,16 @@ def run_engagement(
     EngagementState as a dict. If log_callback is given, call it with each
     new log line as it is produced (for live streaming)."""
     graph = build_graph()
-    initial: dict[str, Any] = {"target": target, "log": [], "done": False}
+    initial: dict[str, Any] = {
+        "target": target,
+        "log": [],
+        "done": False,
+        "round": 0,
+        "max_rounds": 2,
+        "deep_pass": False,
+    }
+    # LangGraph caps super-steps; raise it so a multi-round loop can complete.
+    graph = graph.with_config(recursion_limit=50)
 
     if log_callback is None:
         # Simple path: run to completion and return the final state.
