@@ -1,9 +1,11 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import { AuthProvider } from "@/lib/auth";
 
 export const metadata: Metadata = {
-  title: "RedHive — Autonomous Pentest",
-  description: "Autonomous multi-agent pentest platform",
+  title: "RedHive — Autonomous Pentest Platform",
+  description:
+    "A team of AI agents that continuously pentests your apps and ships proof-backed findings with fixes.",
 };
 
 export default function RootLayout({
@@ -13,7 +15,9 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body>
+        <AuthProvider>{children}</AuthProvider>
+      </body>
     </html>
   );
 }
