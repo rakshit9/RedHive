@@ -41,18 +41,45 @@ def _extract_host(target: str) -> str:
 
 
 def is_allowed(target: str) -> bool:
-    """Return True if `target`'s host is in the configured allowlist."""
+    """Return True if `target`'s host is scannable: either a built-in practice
+    host (static config allowlist) or a customer host the API has authorized for
+    this process after ownership verification."""
     host = _extract_host(target)
     if not host:
         return False
-    return host in settings.allowlist
+    return host in settings.allowlist or host in _authorized_hosts
 
 
 def assert_allowed(target: str) -> None:
-    """Raise ScopeError unless `target` is in scope. No-op when allowed."""
+    """Raise ScopeError unless `target` is in the global practice allowlist.
+
+    This is the tool-level chokepoint (defense in depth): every scan tool calls
+    it before sending a packet, so even a logic bug upstream cannot make the
+    agent touch an unlisted host. Customer hosts pass this only after the API
+    has confirmed org ownership and added them to the runtime allowlist for the
+    duration of the scan (see ``authorize_host``).
+    """
     if not is_allowed(target):
         host = _extract_host(target) or "<unparseable>"
         raise ScopeError(
             f"Target {target!r} (host {host!r}) is not in the scan allowlist "
             f"{settings.allowlist}. Refusing to scan unauthorized targets."
         )
+
+
+# Hosts a customer org has proven they own. The API adds verified targets here
+# at scan-enqueue time so the tool-level ``assert_allowed`` accepts them without
+# baking customer hosts into the static config allowlist.
+_authorized_hosts: set[str] = set()
+
+
+def authorize_host(target_or_host: str) -> None:
+    """Mark a verified host as scannable for the running process."""
+    host = _extract_host(target_or_host)
+    if host:
+        _authorized_hosts.add(host)
+
+
+def host_for(target: str) -> str:
+    """Public helper: the bare host of a target (lowercased)."""
+    return _extract_host(target)
