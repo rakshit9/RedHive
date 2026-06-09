@@ -38,9 +38,12 @@ def render_json(scan: dict[str, Any]) -> dict[str, Any]:
         "target": scan.get("target"),
         "status": scan.get("status"),
         "generated_at": datetime.now(timezone.utc).isoformat(),
+        "risk_score": scan.get("risk_score"),
         "summary": _counts(findings),
         "regression": scan.get("regression_summary"),
+        "attack_chains": scan.get("attack_chains", []),
         "findings": findings,
+        "patches": scan.get("patches", []),
         "fixed": scan.get("fixed", []),
     }
 
@@ -52,6 +55,14 @@ def render_markdown(scan: dict[str, Any]) -> str:
     target = scan.get("target", "unknown")
     generated = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
+    score = scan.get("risk_score")
+    band = ""
+    if isinstance(score, int):
+        band = (
+            "CRITICAL" if score >= 80 else "HIGH" if score >= 50
+            else "MEDIUM" if score >= 20 else "LOW"
+        )
+
     lines: list[str] = [
         f"# RedHive Pentest Report",
         "",
@@ -59,6 +70,10 @@ def render_markdown(scan: dict[str, Any]) -> str:
         f"**Scan ID:** `{scan.get('scan_id', '')}`  ",
         f"**Status:** {scan.get('status', 'unknown')}  ",
         f"**Generated:** {generated}",
+    ]
+    if isinstance(score, int):
+        lines.append(f"**Risk score:** {score}/100 ({band})")
+    lines += [
         "",
         "## Summary",
         "",
@@ -80,6 +95,16 @@ def render_markdown(scan: dict[str, Any]) -> str:
             f"- ♻️ Recurring: **{reg.get('recurring', 0)}**",
             f"- ✅ Fixed: **{reg.get('fixed', 0)}**",
         ]
+
+    chains = scan.get("attack_chains") or []
+    if chains:
+        lines += ["", "## Attack Chains", ""]
+        for c in chains:
+            lines.append(f"### ⚔️ {c.get('name', 'Attack chain')}")
+            lines += [f"{j}. {step}" for j, step in enumerate(c.get("steps", []), 1)]
+            if c.get("impact"):
+                lines += ["", f"**Impact:** {c['impact']}"]
+            lines.append("")
 
     lines += ["", "## Findings", ""]
     if not findings:
@@ -108,6 +133,17 @@ def render_markdown(scan: dict[str, Any]) -> str:
         if f.get("remediation"):
             lines += ["", f"**Remediation:** {f['remediation']}"]
         lines.append("")
+
+    patches = scan.get("patches") or []
+    if patches:
+        lines += ["## Suggested Fixes (auto-generated)", ""]
+        for p in patches:
+            lines.append(f"### 🔧 {p.get('finding_title', 'Fix')}")
+            if p.get("file_hint"):
+                lines.append(f"_{p['file_hint']}_")
+            if p.get("diff"):
+                lines += ["", str(p["diff"])]
+            lines.append("")
 
     fixed = scan.get("fixed", [])
     if fixed:

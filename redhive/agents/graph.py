@@ -27,8 +27,10 @@ from langgraph.graph import END, START, StateGraph
 from redhive.agents.lead import lead
 from redhive.agents.lead_review import lead_review
 from redhive.agents.orchestrator import orchestrator
+from redhive.agents.patch import patch
 from redhive.agents.recon import recon
 from redhive.agents.reporter import reporter
+from redhive.agents.strategist import strategist
 from redhive.agents.tester import tester
 from redhive.agents.validator import validator
 from redhive.models import EngagementState
@@ -62,6 +64,9 @@ class _GraphState(TypedDict, total=False):
     max_rounds: int
     next_action: str
     deep_pass: bool
+    # Post-engagement intelligence (patch / strategist nodes).
+    attack_chains: list[dict[str, Any]]
+    risk_score: int
 
 
 def _route_after_orchestrator(state: EngagementState) -> str:
@@ -85,6 +90,8 @@ def build_graph():
     builder.add_node("validator", validator)
     builder.add_node("lead_review", lead_review)
     builder.add_node("reporter", reporter)
+    builder.add_node("patch", patch)
+    builder.add_node("strategist", strategist)
 
     builder.add_edge(START, "orchestrator")
     builder.add_conditional_edges(
@@ -102,7 +109,10 @@ def build_graph():
         _route_after_review,
         {"tester": "tester", "reporter": "reporter"},
     )
-    builder.add_edge("reporter", END)
+    # Finish path: report -> auto-remediation -> exploit-chain/risk -> END.
+    builder.add_edge("reporter", "patch")
+    builder.add_edge("patch", "strategist")
+    builder.add_edge("strategist", END)
 
     return builder.compile()
 

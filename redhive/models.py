@@ -105,3 +105,7 @@ class EngagementState(TypedDict, total=False):
     max_rounds: int  # loop cap
     next_action: str  # "deepen" | "finish" (lead_review -> routing)
     deep_pass: bool  # widen tester coverage on a later round
+
+    # Post-engagement intelligence.
+    attack_chains: list[dict[str, Any]]  # strategist: chained attack paths
+    risk_score: int  # strategist: overall 0-100 risk score

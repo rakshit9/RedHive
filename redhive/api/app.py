@@ -150,6 +150,10 @@ def _run_scan(scan_id: str, target: str, loop: asyncio.AbstractEventLoop) -> Non
         record["findings"] = annotated
         record["fixed"] = fixed
         record["regression_summary"] = summary
+        # Post-engagement intelligence from the strategist/patch nodes.
+        record["patches"] = state.get("patches", [])
+        record["attack_chains"] = state.get("attack_chains", [])
+        record["risk_score"] = state.get("risk_score")
         if previous:
             _emit(
                 f"[memory] vs previous scan — {summary['new']} new, "
@@ -199,6 +203,9 @@ async def create_scan(req: ScanRequest, background_tasks: BackgroundTasks) -> di
         "log": [],
         "fixed": [],
         "regression_summary": None,
+        "risk_score": None,
+        "attack_chains": [],
+        "patches": [],
         "created_at": time.time(),
     }
     _LOG_QUEUES[scan_id] = asyncio.Queue()
@@ -232,6 +239,7 @@ async def list_scans() -> dict:
                 "status": rec.get("status"),
                 "findings": sum(counts.values()),
                 "severity_counts": counts,
+                "risk_score": rec.get("risk_score"),
                 "regression_summary": rec.get("regression_summary"),
             }
         )
@@ -250,6 +258,9 @@ async def get_scan(scan_id: str) -> dict:
             "findings": record["findings"],
             "fixed": record.get("fixed", []),
             "regression_summary": record.get("regression_summary"),
+            "risk_score": record.get("risk_score"),
+            "attack_chains": record.get("attack_chains", []),
+            "patches": record.get("patches", []),
             "log": record["log"],
         }
 
@@ -283,6 +294,9 @@ async def get_report(scan_id: str, format: str = "markdown"):
         "findings": record.get("findings", []),
         "fixed": record.get("fixed", []),
         "regression_summary": record.get("regression_summary"),
+        "risk_score": record.get("risk_score"),
+        "attack_chains": record.get("attack_chains", []),
+        "patches": record.get("patches", []),
     }
     if format == "json":
         return report.render_json(scan)
