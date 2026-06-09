@@ -13,6 +13,11 @@ from typing import Any
 
 from redhive.models import EngagementState
 
+# Categories whose findings are server-wide rather than per-page. Reporting
+# the same issue once for every endpoint is noise (and hurts the
+# false-positive rate), so we collapse these by title across the whole site.
+_SITE_WIDE_CATEGORIES = {"Security Headers", "TLS"}
+
 
 def validator(state: EngagementState) -> dict[str, Any]:
     """Re-check raw findings; confirm the real ones, drop the dupes."""
@@ -30,6 +35,7 @@ def validator(state: EngagementState) -> dict[str, Any]:
         finding = dict(f)
         title = str(finding.get("title", "")).strip()
         target = str(finding.get("target", "")).strip()
+        category = str(finding.get("category", "")).strip()
 
         # Obvious non-finding: no title at all.
         if not title:
@@ -38,7 +44,12 @@ def validator(state: EngagementState) -> dict[str, Any]:
             reviewed.append(finding)
             continue
 
-        key = (title.lower(), target.lower())
+        # Server-wide issues collapse across endpoints (by title only);
+        # per-page issues (XSS, exposed files) stay keyed by target too.
+        if category in _SITE_WIDE_CATEGORIES:
+            key = (title.lower(), "")
+        else:
+            key = (title.lower(), target.lower())
         if key in seen:
             finding["false_positive"] = True
             finding["confirmed"] = False

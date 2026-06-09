@@ -30,8 +30,17 @@ _SEVERITY_ORDER = ["critical", "high", "medium", "low", "info"]
 
 
 def _normalize_severity(value: Any) -> str:
-    """Coerce any severity-ish value to a valid ``Severity`` string."""
+    """Coerce any severity-ish value to a valid ``Severity`` string.
+
+    Handles plain strings, ``Severity`` enum members, and stringified enums
+    like ``"Severity.HIGH"`` — which is what ``str()`` yields for a
+    ``(str, Enum)`` member and was previously collapsing everything to "info".
+    """
+    if isinstance(value, Severity):
+        return value.value
     sev = str(value or "").strip().lower()
+    if "." in sev:  # e.g. "severity.high" -> "high"
+        sev = sev.rsplit(".", 1)[-1]
     return sev if sev in _VALID_SEVERITIES else Severity.INFO.value
 
 
