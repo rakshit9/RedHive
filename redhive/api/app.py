@@ -216,18 +216,27 @@ async def stream_log(scan_id: str) -> EventSourceResponse:
 
     async def event_generator():
         # Replay anything already logged so late subscribers see the full run.
+        replayed = 0
         for line in list(_SCANS[scan_id]["log"]):
             yield {"event": "log", "data": line}
+            replayed += 1
 
         # If the scan already finished, there is no live queue to drain.
         if queue is None or _SCANS[scan_id]["status"] in ("done", "failed"):
             yield {"event": "done", "data": _SCANS[scan_id]["status"]}
             return
 
+        # The queue holds every emitted line from the start of the scan, so the
+        # first ``replayed`` items are the ones we just replayed — skip them to
+        # avoid sending duplicates, then stream the rest live.
+        skipped = 0
         while True:
             line = await queue.get()
             if line is None:  # sentinel -> scan finished
                 break
+            if skipped < replayed:
+                skipped += 1
+                continue
             yield {"event": "log", "data": line}
 
         yield {"event": "done", "data": _SCANS[scan_id]["status"]}
