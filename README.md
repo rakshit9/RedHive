@@ -88,52 +88,72 @@ cp .env.example .env
 #   OPENAI_API_KEY=sk-...
 ```
 
-### 3. Start the practice target + database
+### 3. Start the database (+ optional practice target)
 
 ```bash
-docker compose up -d   # starts OWASP Juice Shop (port 3000) and Postgres (5432)
+docker compose up -d db juiceshop   # Postgres + OWASP Juice Shop
 ```
 
-### 4. Run the API
+### 4. Apply migrations, run the API and a worker
+
+The API only *enqueues* scans; a separate **worker** process executes them
+(pulling from a Postgres-backed queue via `FOR UPDATE SKIP LOCKED`). Run at
+least one of each:
 
 ```bash
-uvicorn redhive.api.app:app --reload
-# API on http://localhost:8000  (docs at /docs)
+alembic upgrade head                                  # create/upgrade schema
+uvicorn redhive.api.app:app --reload                  # API on :8000 (docs at /docs)
+python -m redhive.worker                               # scan worker (run N of these to scale)
 ```
 
-### 5. Kick off a scan
+### 5. Run the dashboard
 
 ```bash
-# Start a scan against the local Juice Shop
-curl -s -X POST http://localhost:8000/scans \
-  -H 'Content-Type: application/json' \
-  -d '{"target": "http://localhost:3000"}'
-# -> {"scan_id": "...", "status": "running"}
-
-# Poll status + findings
-curl -s http://localhost:8000/scans/<scan_id>
-
-# (Optional) follow the live agent log over SSE
-curl -N http://localhost:8000/scans/<scan_id>/log
+cd ui && npm install && npm run dev    # http://localhost:3000
 ```
 
-A target outside the allowlist is rejected up front:
+Sign up, then either scan a built-in practice target (`http://localhost:3000`)
+or add and **verify ownership** of your own domain under **Targets**.
+
+### Driving it from the API
 
 ```bash
-curl -s -X POST http://localhost:8000/scans \
-  -H 'Content-Type: application/json' \
-  -d '{"target": "http://example.com"}'
-# -> 403  "Target ... is not in the scan allowlist ... Refusing to scan unauthorized targets."
+# 1) Sign up -> returns a session token + a one-time API key
+curl -s -X POST localhost:8000/auth/signup -H 'content-type: application/json' \
+  -d '{"org_name":"Acme","email":"you@acme.com","password":"password123"}'
+
+# 2) Enqueue a scan (Bearer = the api_key from signup)
+curl -s -X POST localhost:8000/scans -H "authorization: Bearer rh_..." \
+  -H 'content-type: application/json' -d '{"target":"http://localhost:3000"}'
+# -> {"scan_id":"...","status":"queued"}
+
+# 3) Follow the live agent log (SSE), then read results
+curl -N localhost:8000/scans/<scan_id>/log -H "authorization: Bearer rh_..."
+curl -s   localhost:8000/scans/<scan_id>     -H "authorization: Bearer rh_..."
 ```
 
-### API endpoints
+Scanning a host the org hasn't registered and verified is refused with `403`.
 
-| Method | Path                   | Description                                          |
-| ------ | ---------------------- | ---------------------------------------------------- |
-| `POST` | `/scans`               | Start a scan. Body: `{"target": "..."}`. Returns `{scan_id, status}`. `403` if out of scope. |
-| `GET`  | `/scans/{scan_id}`     | Status, findings, and accumulated log for a scan.    |
-| `GET`  | `/scans/{scan_id}/log` | Live agent log as Server-Sent Events; closes when the scan finishes. |
-| `GET`  | `/healthz`             | Liveness probe.                                      |
+### API endpoints (all scoped to the authenticated org)
+
+| Method | Path                       | Description                                                        |
+| ------ | -------------------------- | ------------------------------------------------------------------ |
+| `POST` | `/auth/signup`             | Create org + owner; returns session token and a one-time API key.  |
+| `POST` | `/auth/login`              | Exchange email/password for a session token.                       |
+| `GET`/`POST` | `/auth/keys`         | List / mint API keys (session only).                               |
+| `GET`/`POST` | `/targets`           | List / register targets.                                           |
+| `POST` | `/targets/{id}/verify`     | Run the DNS/HTTP ownership probe; flips the target to verified.    |
+| `POST` | `/scans`                   | Enqueue a scan. `403` unless the host is a practice or verified target. |
+| `GET`  | `/scans` · `/scans/{id}`   | List scans / full scan detail (findings, chains, patches, log).    |
+| `GET`  | `/scans/{id}/log`          | Live agent log as Server-Sent Events.                              |
+| `GET`  | `/scans/{id}/report`       | Export the report (`?format=markdown\|json`).                      |
+| `GET`  | `/healthz`                 | Liveness probe.                                                    |
+
+### Run the whole stack in Docker
+
+```bash
+docker compose up -d --build   # db + juiceshop + api (migrates on start) + worker
+```
 
 ---
 
