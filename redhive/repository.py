@@ -20,6 +20,7 @@ from redhive.db_models import (
     ApiKey,
     AttackChain,
     Finding,
+    GitHubIntegration,
     Organization,
     Patch,
     Scan,
@@ -354,6 +355,55 @@ def save_attack_chains(db: Session, scan_id: uuid.UUID, chains: list[dict[str, A
 
 def append_log(db: Session, scan_id: uuid.UUID, seq: int, line: str) -> None:
     db.add(ScanLog(scan_id=scan_id, seq=seq, line=line))
+
+
+# --------------------------------------------------------------------------- #
+# GitHub integrations                                                         #
+# --------------------------------------------------------------------------- #
+
+
+def list_github_integrations(db: Session, org_id: uuid.UUID) -> Sequence[GitHubIntegration]:
+    return db.scalars(
+        select(GitHubIntegration).where(GitHubIntegration.org_id == org_id).order_by(GitHubIntegration.created_at)
+    ).all()
+
+
+def get_github_integration(db: Session, org_id: uuid.UUID) -> GitHubIntegration | None:
+    """The org's default (oldest) GitHub integration, if any."""
+    return db.scalar(
+        select(GitHubIntegration)
+        .where(GitHubIntegration.org_id == org_id)
+        .order_by(GitHubIntegration.created_at)
+        .limit(1)
+    )
+
+
+def upsert_github_integration(
+    db: Session, *, org_id: uuid.UUID, repo_full_name: str, token_encrypted: str, default_branch: str
+) -> GitHubIntegration:
+    existing = db.scalar(
+        select(GitHubIntegration).where(
+            GitHubIntegration.org_id == org_id, GitHubIntegration.repo_full_name == repo_full_name
+        )
+    )
+    if existing is not None:
+        existing.token_encrypted = token_encrypted
+        existing.default_branch = default_branch
+        return existing
+    integ = GitHubIntegration(
+        org_id=org_id, repo_full_name=repo_full_name, token_encrypted=token_encrypted, default_branch=default_branch
+    )
+    db.add(integ)
+    db.flush()
+    return integ
+
+
+def delete_github_integration(db: Session, org_id: uuid.UUID, integration_id: uuid.UUID) -> bool:
+    integ = db.get(GitHubIntegration, integration_id)
+    if integ is None or integ.org_id != org_id:
+        return False
+    db.delete(integ)
+    return True
 
 
 def get_logs(db: Session, scan_id: uuid.UUID, *, after_seq: int = -1) -> list[ScanLog]:
