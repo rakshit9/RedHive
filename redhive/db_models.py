@@ -103,6 +103,9 @@ class Organization(Base):
     api_keys: Mapped[list["ApiKey"]] = relationship(back_populates="organization", cascade="all, delete-orphan")
     targets: Mapped[list["Target"]] = relationship(back_populates="organization", cascade="all, delete-orphan")
     scans: Mapped[list["Scan"]] = relationship(back_populates="organization", cascade="all, delete-orphan")
+    github_integrations: Mapped[list["GitHubIntegration"]] = relationship(
+        back_populates="organization", cascade="all, delete-orphan"
+    )
 
 
 class User(Base):
@@ -275,6 +278,28 @@ class AttackChain(Base):
     impact: Mapped[str] = mapped_column(Text, nullable=False, default="")
 
     scan: Mapped[Scan] = relationship(back_populates="attack_chains")
+
+
+class GitHubIntegration(Base):
+    """A connected GitHub repository RedHive can open remediation PRs against.
+
+    The access token is stored encrypted (see ``redhive.crypto``); we never
+    persist it in plaintext. One row per (org, repo).
+    """
+
+    __tablename__ = "github_integrations"
+    __table_args__ = (UniqueConstraint("org_id", "repo_full_name", name="uq_github_org_repo"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    repo_full_name: Mapped[str] = mapped_column(String(255), nullable=False)  # "owner/repo"
+    token_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
+    default_branch: Mapped[str] = mapped_column(String(120), nullable=False, default="main")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+    organization: Mapped[Organization] = relationship(back_populates="github_integrations")
 
 
 class ScanLog(Base):
