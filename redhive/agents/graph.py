@@ -41,6 +41,7 @@ from redhive.agents.reporter import reporter
 from redhive.agents.strategist import strategist
 from redhive.agents.validator import validator
 from redhive.models import EngagementState
+from redhive.usage import ScanUsage
 
 
 class _GraphState(TypedDict, total=False):
@@ -151,12 +152,18 @@ def run_engagement(
         "max_rounds": 2,
         "deep_pass": False,
     }
-    # LangGraph caps super-steps; raise it so a multi-round loop can complete.
-    graph = graph.with_config(recursion_limit=50)
+    # A per-scan usage tracker, attached as a callback so every LLM call across
+    # all agents is aggregated. recursion_limit is raised so the multi-round
+    # loop can complete. Callbacks in the run config propagate to the nested
+    # llm.invoke calls inside each node (LangGraph threads the run context).
+    usage = ScanUsage()
+    config: dict[str, Any] = {"recursion_limit": 50, "callbacks": [usage.handler]}
 
     if log_callback is None:
         # Simple path: run to completion and return the final state.
-        return dict(graph.invoke(initial))
+        final_state = dict(graph.invoke(initial, config))
+        final_state["usage"] = usage.summary()
+        return final_state
 
     # Streaming path: emit each new log line as nodes complete. We stream node
     # updates and diff the cumulative log so the callback sees lines in order.
@@ -164,7 +171,7 @@ def run_engagement(
     emitted = 0
     accumulated: list[str] = []
 
-    for chunk in graph.stream(initial, stream_mode="values"):
+    for chunk in graph.stream(initial, config, stream_mode="values"):
         final_state = dict(chunk)
         accumulated = final_state.get("log", []) or []
         while emitted < len(accumulated):
@@ -174,4 +181,5 @@ def run_engagement(
                 pass
             emitted += 1
 
+    final_state["usage"] = usage.summary()
     return final_state
