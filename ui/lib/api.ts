@@ -242,6 +242,39 @@ export function reportUrl(scanId: string, format: "markdown" | "json") {
   return `${API_URL}/scans/${scanId}/report?format=${format}`;
 }
 
+export function openPullRequest(scanId: string) {
+  return request<{ pr_url: string; branch: string; repo: string }>(
+    `/scans/${scanId}/pr`,
+    { method: "POST" }
+  );
+}
+
+// --------------------------------------------------------------------------- //
+// GitHub integrations                                                         //
+// --------------------------------------------------------------------------- //
+
+export interface GitHubIntegration {
+  id: string;
+  repo_full_name: string;
+  default_branch: string;
+  created_at: string | null;
+}
+
+export function listIntegrations() {
+  return request<{ integrations: GitHubIntegration[] }>("/integrations/github");
+}
+
+export function connectGitHub(repo_full_name: string, token: string) {
+  return request<{ integration: GitHubIntegration; message: string }>(
+    "/integrations/github",
+    { method: "POST", body: { repo_full_name, token } }
+  );
+}
+
+export function disconnectGitHub(id: string) {
+  return request<void>(`/integrations/github/${id}`, { method: "DELETE" });
+}
+
 // Stream the live log via fetch + ReadableStream so we can pass the auth header
 // (EventSource cannot). Parses the SSE wire format manually. Returns an abort fn.
 export function streamLog(
