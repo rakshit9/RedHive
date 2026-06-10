@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import * as api from "@/lib/api";
 import LogTerminal from "@/components/LogTerminal";
+import SwarmView from "@/components/SwarmView";
 import RiskGauge from "@/components/RiskGauge";
 import FindingCard from "@/components/FindingCard";
 import { AttackChainCard, PatchCard } from "@/components/ResultExtras";
@@ -139,7 +140,12 @@ export default function ScanDetail() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-6 px-8 py-6 lg:grid-cols-2">
+      {/* Live parallel agent-swarm visualizer */}
+      <div className="px-8 pt-6">
+        <SwarmView log={log} />
+      </div>
+
+      <div className="grid grid-cols-1 gap-6 px-8 pb-6 lg:grid-cols-2">
         {/* Live log */}
         <div className="lg:sticky lg:top-6 lg:self-start">
           <LogTerminal log={log} live={live} />
