@@ -15,7 +15,7 @@ from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
-from redhive import report, repository as repo
+from redhive import crypto, github_pr, report, repository as repo
 from redhive.api.deps import AuthContext, require_auth
 from redhive.config import settings
 from redhive.database import session_scope
@@ -89,6 +89,49 @@ def get_scan(scan_id: uuid.UUID, ctx: AuthContext = Depends(require_auth)) -> di
         data = repo.scan_to_dict(scan, include_children=True)
         data["log"] = [l.line for l in repo.get_logs(db, scan.id)]
         return data
+
+
+@router.post("/{scan_id}/pr")
+def open_pull_request(scan_id: uuid.UUID, ctx: AuthContext = Depends(require_auth)) -> dict:
+    """Open a GitHub PR with this scan's remediation report + suggested fixes.
+
+    Requires a connected GitHub integration and a finished scan with patches.
+    """
+    with session_scope() as db:
+        scan = repo.get_scan(db, scan_id, org_id=ctx.org_id)
+        if scan is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Scan not found.")
+        if scan.status != ScanStatus.DONE:
+            raise HTTPException(status.HTTP_409_CONFLICT, "Scan is not finished.")
+        if not scan.patches:
+            raise HTTPException(status.HTTP_409_CONFLICT, "This scan produced no patches to PR.")
+
+        integ = repo.get_github_integration(db, ctx.org_id)
+        if integ is None:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "No GitHub repository connected. Connect one under Integrations first.",
+            )
+        token = crypto.decrypt(integ.token_encrypted)
+        repo_full_name, default_branch = integ.repo_full_name, integ.default_branch
+        payload = repo.scan_to_dict(scan, include_children=True)
+
+    if token is None:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "Stored GitHub token could not be decrypted — please reconnect the repository.",
+        )
+
+    try:
+        result = github_pr.open_remediation_pr(
+            repo_full_name=repo_full_name,
+            token=token,
+            scan=payload,
+            default_branch=default_branch,
+        )
+    except github_pr.GitHubError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    return {"pr_url": result["pr_url"], "branch": result["branch"], "repo": repo_full_name}
 
 
 @router.get("/{scan_id}/report")
