@@ -26,6 +26,7 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     Enum as SAEnum,
+    Float,
     ForeignKey,
     Integer,
     String,
@@ -204,6 +205,11 @@ class Scan(Base):
     risk_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
     regression_summary: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     error: Mapped[str] = mapped_column(Text, nullable=False, default="")
+
+    # LLM usage for this scan (filled in when the engagement finishes).
+    tokens_used: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    llm_calls: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    cost_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     # Work-queue bookkeeping for FOR UPDATE SKIP LOCKED claiming.
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

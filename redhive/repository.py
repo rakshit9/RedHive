@@ -78,6 +78,11 @@ def scan_to_dict(s: Scan, *, include_children: bool = False) -> dict[str, Any]:
         "severity_counts": counts,
         "findings_count": len(s.findings),
         "error": s.error,
+        "usage": {
+            "tokens": s.tokens_used,
+            "llm_calls": s.llm_calls,
+            "cost_usd": s.cost_usd,
+        },
         "created_at": s.created_at.isoformat() if s.created_at else None,
         "started_at": s.started_at.isoformat() if s.started_at else None,
         "finished_at": s.finished_at.isoformat() if s.finished_at else None,
@@ -285,11 +290,16 @@ def claim_next_queued_scan(db: Session, worker_id: str) -> Scan | None:
 def finish_scan(
     db: Session, scan: Scan, *, status: ScanStatus, risk_score: int | None = None,
     regression_summary: dict | None = None, error: str = "",
+    usage: dict[str, Any] | None = None,
 ) -> None:
     scan.status = status
     scan.risk_score = risk_score
     scan.regression_summary = regression_summary
     scan.error = error
+    if usage:
+        scan.tokens_used = usage.get("total_tokens")
+        scan.llm_calls = usage.get("llm_calls")
+        scan.cost_usd = usage.get("cost_usd")
     scan.finished_at = _utcnow()
 
 
