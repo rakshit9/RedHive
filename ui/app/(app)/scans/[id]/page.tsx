@@ -18,7 +18,23 @@ export default function ScanDetail() {
   const [log, setLog] = useState<string[]>([]);
   const [tab, setTab] = useState<"findings" | "chains" | "patches">("findings");
   const [notFound, setNotFound] = useState(false);
+  const [prBusy, setPrBusy] = useState(false);
+  const [prUrl, setPrUrl] = useState<string | null>(null);
+  const [prErr, setPrErr] = useState<string | null>(null);
   const stopRef = useRef<(() => void) | null>(null);
+
+  async function openPr() {
+    setPrBusy(true);
+    setPrErr(null);
+    try {
+      const res = await api.openPullRequest(id);
+      setPrUrl(res.pr_url);
+    } catch (e) {
+      setPrErr(e instanceof api.ApiError ? e.message : "Could not open PR.");
+    } finally {
+      setPrBusy(false);
+    }
+  }
 
   // Initial load + live streaming for active scans.
   useEffect(() => {
@@ -191,7 +207,39 @@ export default function ScanDetail() {
               {patches.length === 0 ? (
                 <Empty>No suggested fixes.</Empty>
               ) : (
-                patches.map((p, i) => <PatchCard key={i} patch={p} />)
+                <>
+                  <div className="flex flex-wrap items-center gap-3 rounded-xl border border-[#1b2330] bg-[#0c1018]/70 px-4 py-3">
+                    <div className="flex-1 text-sm text-gray-300">
+                      Open a pull request with these fixes on your connected repo.
+                    </div>
+                    {prUrl ? (
+                      <a
+                        href={prUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-semibold text-white hover:bg-emerald-500"
+                      >
+                        ✓ View pull request ↗
+                      </a>
+                    ) : (
+                      <button
+                        onClick={openPr}
+                        disabled={prBusy}
+                        className="rounded-lg bg-hive-accent px-4 py-2 text-xs font-semibold text-black hover:bg-amber-400 disabled:opacity-50"
+                      >
+                        {prBusy ? "Opening PR…" : "🐙 Open Pull Request"}
+                      </button>
+                    )}
+                  </div>
+                  {prErr && (
+                    <div className="rounded-lg border border-red-900/60 bg-red-950/40 px-4 py-2 text-xs text-red-300">
+                      {prErr}
+                    </div>
+                  )}
+                  {patches.map((p, i) => (
+                    <PatchCard key={i} patch={p} />
+                  ))}
+                </>
               )}
             </div>
           )}
