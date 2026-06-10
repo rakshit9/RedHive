@@ -9,12 +9,19 @@ exposes two public entrypoints the API depends on:
 Edge structure::
 
     START -> orchestrator -> (scope refused) -> END
-                          \\-> recon -> lead -> tester
-                                 -> validator -> reporter -> END
+                          \\-> recon -> lead -> plan_probes
+                                 ==(Send × N)==> probe (parallel swarm)
+                                 -> aggregate -> validator -> lead_review
+                                 -> (deepen) plan_probes  | (finish) reporter
+                                 -> patch -> strategist -> END
 
-The accumulating list fields (``log``, ``attack_surface``, ``findings``,
-``confirmed``, ``plan``) use ``operator.add`` reducers so each node can return
-a partial update and have it merged rather than overwrite prior state.
+The testing phase is a map-reduce *swarm*: ``plan_probes`` expands the attack
+surface into N tasks, ``fan_out_probes`` emits a ``Send`` per task so the probe
+agents run concurrently in one super-step, and ``aggregate`` fans them back in.
+
+Reducer channels (``operator.add``): ``log`` accumulates progress lines across
+the whole run, and ``raw_findings`` merges the concurrent writes from the probe
+swarm. Everything else is last-write-wins, owned by a single node per round.
 """
 
 from __future__ import annotations
@@ -28,10 +35,10 @@ from redhive.agents.lead import lead
 from redhive.agents.lead_review import lead_review
 from redhive.agents.orchestrator import orchestrator
 from redhive.agents.patch import patch
+from redhive.agents.probe import aggregate, fan_out_probes, plan_probes, probe
 from redhive.agents.recon import recon
 from redhive.agents.reporter import reporter
 from redhive.agents.strategist import strategist
-from redhive.agents.tester import tester
 from redhive.agents.validator import validator
 from redhive.models import EngagementState
 
@@ -64,6 +71,12 @@ class _GraphState(TypedDict, total=False):
     max_rounds: int
     next_action: str
     deep_pass: bool
+    # Parallel probe swarm. ``raw_findings`` MUST have a reducer: the fanned-out
+    # probe agents all write it concurrently in one super-step, and the reducer
+    # merges those writes instead of raising a concurrent-update error.
+    probe_tasks: list[dict[str, Any]]
+    raw_findings: Annotated[list[dict[str, Any]], operator.add]
+    agents_dispatched: int
     # Post-engagement intelligence (patch / strategist nodes).
     attack_chains: list[dict[str, Any]]
     risk_score: int
@@ -76,7 +89,7 @@ def _route_after_orchestrator(state: EngagementState) -> str:
 
 def _route_after_review(state: dict[str, Any]) -> str:
     """Conditional edge: loop back for a deeper pass, or finish up."""
-    return "tester" if state.get("next_action") == "deepen" else "reporter"
+    return "plan_probes" if state.get("next_action") == "deepen" else "reporter"
 
 
 def build_graph():
@@ -86,7 +99,9 @@ def build_graph():
     builder.add_node("orchestrator", orchestrator)
     builder.add_node("recon", recon)
     builder.add_node("lead", lead)
-    builder.add_node("tester", tester)
+    builder.add_node("plan_probes", plan_probes)
+    builder.add_node("probe", probe)
+    builder.add_node("aggregate", aggregate)
     builder.add_node("validator", validator)
     builder.add_node("lead_review", lead_review)
     builder.add_node("reporter", reporter)
@@ -100,14 +115,18 @@ def build_graph():
         {"recon": "recon", END: END},
     )
     builder.add_edge("recon", "lead")
-    builder.add_edge("lead", "tester")
-    builder.add_edge("tester", "validator")
+    builder.add_edge("lead", "plan_probes")
+    # Map: fan a Send out to a probe agent per task — they run concurrently.
+    builder.add_conditional_edges("plan_probes", fan_out_probes, ["probe"])
+    # Reduce: every probe flows into aggregate, which fans the results in.
+    builder.add_edge("probe", "aggregate")
+    builder.add_edge("aggregate", "validator")
     # After validation the Lead reviews results and may loop for a deeper pass.
     builder.add_edge("validator", "lead_review")
     builder.add_conditional_edges(
         "lead_review",
         _route_after_review,
-        {"tester": "tester", "reporter": "reporter"},
+        {"plan_probes": "plan_probes", "reporter": "reporter"},
     )
     # Finish path: report -> auto-remediation -> exploit-chain/risk -> END.
     builder.add_edge("reporter", "patch")
