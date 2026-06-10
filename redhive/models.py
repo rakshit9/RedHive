@@ -89,12 +89,20 @@ class EngagementState(TypedDict, total=False):
     target: str
     scope_allowed: bool
     attack_surface: list[dict[str, Any]]  # serialized Endpoint list
-    findings: list[dict[str, Any]]  # raw, serialized Finding list
+    findings: list[dict[str, Any]]  # aggregated, serialized Finding list
     confirmed: list[dict[str, Any]]  # after Validator
     patches: list[dict[str, Any]]
     plan: list[str]  # Lead agent's current to-do
     log: list[str]  # human-readable live log for the UI
     done: bool
+
+    # Parallel probe-agent swarm (see redhive.agents.probe). ``probe_tasks`` is
+    # the dispatched task list; ``raw_findings`` is the reducer channel the
+    # concurrent probe agents append to; ``agents_dispatched`` is the swarm size
+    # (surfaced in the log/UI as proof of parallel fan-out).
+    probe_tasks: list[dict[str, Any]]
+    raw_findings: list[dict[str, Any]]
+    agents_dispatched: int
 
     # Recon hand-off + iterative-loop bookkeeping. These must live on the
     # public contract (not just the graph's internal schema) because LangGraph
