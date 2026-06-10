@@ -21,6 +21,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from redhive.api.routes_auth import router as auth_router
+from redhive.api.routes_integrations import router as integrations_router
 from redhive.api.routes_scans import router as scans_router
 from redhive.api.routes_targets import router as targets_router
 from redhive.config import settings
@@ -42,6 +43,7 @@ app.add_middleware(
 app.include_router(auth_router)
 app.include_router(targets_router)
 app.include_router(scans_router)
+app.include_router(integrations_router)
 
 
 @app.get("/healthz", tags=["meta"])
