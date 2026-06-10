@@ -119,6 +119,16 @@ export default function ScanDetail() {
             </div>
           </div>
           <div className="flex items-center gap-5">
+            {!live && scan?.usage?.tokens != null && (
+              <div className="rounded-lg border border-[#1b2330] bg-[#0c1018]/70 px-3 py-2 text-right">
+                <div className="text-sm font-semibold text-gray-200">
+                  {scan.usage.tokens.toLocaleString()} tokens
+                </div>
+                <div className="text-[10px] text-gray-500">
+                  {scan.usage.llm_calls} LLM calls · ~${scan.usage.cost_usd?.toFixed(4)}
+                </div>
+              </div>
+            )}
             {!live && <RiskGauge score={scan?.risk_score ?? null} />}
             {scan?.status === "done" && (
               <div className="flex flex-col gap-1.5">

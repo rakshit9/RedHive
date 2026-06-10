@@ -94,6 +94,12 @@ export interface Patch {
   explanation: string;
 }
 
+export interface Usage {
+  tokens: number | null;
+  llm_calls: number | null;
+  cost_usd: number | null;
+}
+
 export interface ScanSummary {
   scan_id: string;
   target: string;
@@ -102,6 +108,7 @@ export interface ScanSummary {
   severity_counts: Record<string, number>;
   findings_count: number;
   regression_summary: { new: number; recurring: number; fixed: number } | null;
+  usage: Usage | null;
   created_at: string | null;
   finished_at: string | null;
 }
