@@ -90,6 +90,7 @@ def _run_one(scan_id, org_id, target_url) -> None:  # noqa: ANN001
             previous = [repo.finding_to_dict(f) for f in prev.findings] if prev else []
         annotated, _fixed, summary = diff_findings(previous, list(findings))
 
+        usage = state.get("usage") or {}
         with session_scope() as db:
             scan = repo.get_scan(db, scan_id)
             repo.replace_findings(db, scan_id, annotated)
@@ -99,6 +100,12 @@ def _run_one(scan_id, org_id, target_url) -> None:  # noqa: ANN001
                 db, scan, status=ScanStatus.DONE,
                 risk_score=state.get("risk_score"),
                 regression_summary=summary,
+                usage=usage,
+            )
+        if usage:
+            emit(
+                f"[usage] {usage.get('total_tokens', 0):,} tokens across "
+                f"{usage.get('llm_calls', 0)} LLM call(s) — est. ${usage.get('cost_usd', 0):.4f}."
             )
         if previous:
             emit(
