@@ -12,7 +12,16 @@ services:
     image: bkimminich/juice-shop
     container_name: redhive-juiceshop
     ports:
-      - "3000:3000"
+      - "3001:3000"
+    restart: unless-stopped
+
+  # Bundled intentionally-vulnerable demo target (rich attack surface).
+  demo-target:
+    build: .
+    container_name: redhive-demo-target
+    command: ["uvicorn", "demo_target.app:app", "--host", "0.0.0.0", "--port", "8780"]
+    ports:
+      - "8780:8780"
     restart: unless-stopped
 
   db:
@@ -43,7 +52,7 @@ services:
       - "8000:8000"
     environment:
       DATABASE_URL: postgresql://redhive:redhive@db:5432/redhive
-      SCAN_ALLOWLIST: localhost,127.0.0.1,juiceshop,host.docker.internal
+      SCAN_ALLOWLIST: localhost,127.0.0.1,juiceshop,demo-target,host.docker.internal
     env_file:
       - .env
     depends_on:
@@ -57,7 +66,7 @@ services:
     command: ["python", "-m", "redhive.worker"]
     environment:
       DATABASE_URL: postgresql://redhive:redhive@db:5432/redhive
-      SCAN_ALLOWLIST: localhost,127.0.0.1,juiceshop,host.docker.internal
+      SCAN_ALLOWLIST: localhost,127.0.0.1,juiceshop,demo-target,host.docker.internal
     env_file:
       - .env
     depends_on:
