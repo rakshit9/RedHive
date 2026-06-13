@@ -10,6 +10,7 @@ from __future__ import annotations
 from redhive.tools.cors import check_cors
 from redhive.tools.crawl import crawl
 from redhive.tools.csrf import check_csrf
+from redhive.tools.discover import discover_paths
 from redhive.tools.exposed_files import check_exposed_files
 from redhive.tools.fingerprint import fingerprint
 from redhive.tools.injection import test_sqli, test_xss
@@ -20,6 +21,7 @@ from redhive.tools.tls import check_tls
 
 __all__ = [
     "crawl",
+    "discover_paths",
     "check_security_headers",
     "check_tls",
     "check_exposed_files",
